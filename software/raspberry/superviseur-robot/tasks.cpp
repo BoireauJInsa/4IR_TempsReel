@@ -31,6 +31,7 @@
 
 bool batteryRequested = false;
 bool cameraEnabled = false;
+Camera * camera = new Camera(sm, 5);
 /*
  * Some remarks:
  * 1- This program is mostly a template. It shows you how to create tasks, semaphore
@@ -298,11 +299,27 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             move = msgRcv->GetID();
             rt_mutex_release(&mutex_move);
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_BATTERY_GET)) {
-            batteryRequested = 1;
+            batteryRequested = true;
+            cout << "Asking for bat level" << endl << flush;
         } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
-            cameraEnabled = true;
+            bool state = camera->Open();
+            if(state){
+                cameraEnabled = 1;
+
+            } else{
+                monitor.Write(new Message(MESSAGE_ANSWER_NACK));
+            }
+
+            cout << "Asking for cam open" << endl << flush;
         } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
-            cameraEnabled = false;
+            camera->Close();
+            bool state = camera->IsOpen();
+            cameraEnabled = 0;
+            if(!state){
+                monitor.Write(new Message(MESSAGE_ANSWER_ACK));
+            }
+
+            cout << "Asking for cam close" << endl << flush;
         }
         delete(msgRcv); // must be deleted manually, no consumer
     }
@@ -340,12 +357,11 @@ void Tasks::UpdateBattery(void *arg){
 
             // Mutex pour robot.Write
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            MessageBattery * msgSend;
-            msgSend = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+            MessageBattery * msg;
+            msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+            WriteInQueue(&q_messageToMon, msg);
             rt_mutex_release(&mutex_robot);
-
-            //msgSend = new Message(MESSAGE_ROBOT_BATTERY_GET);
-            WriteInQueue(&q_messageToMon, msgSend);
+            cout << endl << flush;
         }
     }
 }
@@ -367,31 +383,29 @@ void Tasks::ControlCamera(void *arg){
 
     // Mise à jour de la périodicité
     rt_task_set_periodic(NULL, TM_NOW, 10000000);
-    
+
 
     while (1) {
         rt_task_wait_period(NULL);
-
+        
         // Mutex pour rs
         rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
         rs = robotStarted;
         rt_mutex_release(&mutex_robotStarted);
 
         if (cameraEnabled && rs == 1) {
-            camera->Open();
-        
-            /*
-            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            MessageImg * msg;
-            Img image = camera->Grab();
-                msg->SetID(MESSAGE_CAM_IMAGE);
-                msg->SetImage(&image);
-                WriteInQueue(&q_messageToMon, msg);
+            try {
+                
+                MessageImg * msg = new MessageImg();
+                Img image = camera->Grab();
+                    msg->SetID(MESSAGE_CAM_IMAGE);
+                    msg->SetImage(&image);
+                    WriteInQueue(&q_messageToMon, msg);
             
-        } else if (!cameraEnabled && rs == 1) {
-            if (camera->IsOpen()) {
-                camera->Close();
-            }*/
+            }catch( const cv::Exception & e ) {
+                cerr << e.what() << endl;
+
+            }
         }
     }
 }
