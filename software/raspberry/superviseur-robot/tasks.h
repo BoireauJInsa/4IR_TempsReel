@@ -66,6 +66,7 @@ private:
     ComRobot robot;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
+    Camera * camera = new Camera(sm,5);
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -77,6 +78,7 @@ private:
     RT_TASK th_startRobot;
     RT_TASK th_move;
     RT_TASK th_batteryUpdate;
+    RT_TASK th_controlCamera;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -137,6 +139,11 @@ private:
      * @brief Thread updating battery level.
      */
     void UpdateBattery(void *arg);
+
+    /**
+     * @brief Thread controlling camera.
+     */
+    void ControlCamera(void *arg);
     
     /**********************************************************************/
     /* Queue services                                                     */
