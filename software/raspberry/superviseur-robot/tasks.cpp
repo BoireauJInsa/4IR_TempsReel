@@ -85,6 +85,10 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_mutex_create(&mutex_watchdog, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     cout << "Mutexes created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -103,6 +107,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_sem_create(&sem_startRobot, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_watchDog, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -335,13 +343,22 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             cameraEnabled = 0;
             if(!state){
                 monitor.Write(new Message(MESSAGE_ANSWER_ACK));
-              
-            } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)) {
-            rt_sem_v(&sem_startRobot);
-            watchDog = true;
+                cout << "Asking for cam close" << endl << flush;
             }
+        } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)) {
+            rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+            watchDog = true;
+            rt_mutex_release(&mutex_watchdog);            
+            rt_sem_v(&sem_startRobot);
+            rt_sem_v(&sem_watchDog);
+            
+        } else if (msgRcv->CompareID(MESSAGE_ROBOT_RELOAD_WD)) {
+            rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+                robot.Write(robot.ReloadWD());
+            rt_mutex_release(&mutex_watchdog);
 
-            cout << "Asking for cam close" << endl << flush;
+            rt_sem_v(&sem_startRobot);
+            
         }
 
         delete(msgRcv); // must be deleted manually, no consumer
@@ -416,7 +433,7 @@ void Tasks::ControlCamera(void *arg){
         rs = robotStarted;
         rt_mutex_release(&mutex_robotStarted);
 
-        if (cameraEnabled && rs == 1) {
+        if (cameraEnabled) {
             try {
                 
                 MessageImg * msg = new MessageImg();
@@ -442,25 +459,26 @@ void Tasks::WatchDog(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
+    rt_sem_p(&sem_watchDog, TM_INFINITE);
 
     /**************************************************************************************/
     /* The task WatchDog starts here                                                  */
     /**************************************************************************************/
 
     // Mise à jour de la périodicité : 1S
-    rt_task_set_periodic(NULL, TM_NOW, 10000000000);
+    rt_task_set_periodic(NULL, TM_NOW, 1000000000);
     
-    if (watchDog) {
-        while (1) {
-            rt_task_wait_period(NULL);
+    while (1) {
+        
+        rt_task_wait_period(NULL);
 
-            // Mutex pour rs
-            rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-            rs = robotStarted;
-            rt_mutex_release(&mutex_robotStarted);
-         
-            // Si Demarage en watchdog
-            if (watchDog && rs == 1) {
+        // Mutex pour rs
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        rs = robotStarted;
+        rt_mutex_release(&mutex_robotStarted);
+        
+        // Si Demarage en watchdog
+        if (watchDog && rs) {
             cout << "Periodic WatchDog reload" << endl << flush;
 
             // Mutex pour robot.Write
@@ -468,12 +486,9 @@ void Tasks::WatchDog(void *arg){
             MessageBattery * msgSend;
             robot.Write(new Message(MESSAGE_ROBOT_RELOAD_WD));
             rt_mutex_release(&mutex_robot);
-            }
         }
     }
 }
-
-void
 
 /**
  * @brief Thread opening communication with the robot.
@@ -523,7 +538,11 @@ void Tasks::StartRobotTask(void *arg) {
         Message * msgSend;
         rt_sem_p(&sem_startRobot, TM_INFINITE);
 
-        if (watchDog){
+        rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
+         bool local = watchDog;
+        rt_mutex_release(&mutex_watchdog);   
+
+        if (local){
             cout << "Start robot WITH watchdog (";
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
             msgSend = robot.Write(robot.StartWithWD());
