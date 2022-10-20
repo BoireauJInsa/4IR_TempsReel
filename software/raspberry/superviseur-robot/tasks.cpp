@@ -285,8 +285,9 @@ void Tasks::SendToMonTask(void* arg) {
         msg = ReadInQueue(&q_messageToMon);
         cout << "Send msg to mon: " << msg->ToString() << endl << flush;
         rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
-        monitor.Write(msg); // The message is deleted with the Write
         Counter(msg);
+        monitor.Write(msg); // The message is deleted with the Write
+        
         rt_mutex_release(&mutex_monitor);
     }
 }
@@ -420,7 +421,6 @@ void Tasks::UpdateBattery(void *arg){
             msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
             WriteInQueue(&q_messageToMon, msg);
             rt_mutex_release(&mutex_robot);
-            cout << endl << flush;
         }
     }
 }
@@ -468,7 +468,7 @@ void Tasks::ControlCamera(void *arg){
                 MessageImg * msg = new MessageImg();
                 Img image = camera->Grab();
                 image.DrawArena(arena);
-                 if(posRobot == 1){
+                 if(posCompute == 1){
                     std::list<Position> allPos = image.SearchRobot(arena);
                     if(!allPos.empty()){
                         Position pos = allPos.back();
@@ -479,10 +479,10 @@ void Tasks::ControlCamera(void *arg){
                 msg->SetImage(&image);
                 WriteInQueue(&q_messageToMon, msg);
             }catch( const cv::Exception & e ) {
-                cerr << e.what() << endl;
+                cerr << e.what() << endl << flush;;
             } 
         }
-        else if (grabImage == 1) {  // Default periodic image grab
+        else if (grab == 1) {  // Default periodic image grab
             try{
                 MessageImg * msg = new MessageImg();
                 Img image = camera->Grab();
@@ -490,11 +490,9 @@ void Tasks::ControlCamera(void *arg){
                 msg->SetImage(&image);
                 WriteInQueue(&q_messageToMon, msg);
             }catch( const cv::Exception & e ) {
-                cerr << e.what() << endl;
+                cerr << e.what() << endl << flush;;
             } 
         }
-
-        cout << endl << flush;
     }
     
 }
@@ -650,7 +648,7 @@ void Tasks::MoveTask(void *arg) {
             cout << " move: " << cpMove;
             
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            Message msg = robot.Write(new Message((MessageID)cpMove));
+            Message * msg = robot.Write(new Message((MessageID)cpMove));
             Counter(msg);
             rt_mutex_release(&mutex_robot);
         }
@@ -694,11 +692,13 @@ void Tasks::Counter(Message *msg){
     MessageID msgID = msg->GetID();
     if(msgID == MESSAGE_ANSWER_COM_ERROR || msgID == MESSAGE_ANSWER_ROBOT_ERROR || msgID == MESSAGE_ANSWER_ROBOT_TIMEOUT || msgID == MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND){
         counter ++;
+        cerr << "-----timeout for supervisor cmd one time------------" << endl << flush;
     }else{
         counter = 0;
+        cerr << "-----reponse ok, no timeout------------" << endl << flush;
     }
-    if(lostCount >= MAX_COUNTER){
-            cerr << "Counter at max" << endl << flush;
+    if(counter >= MAX_COUNTER){
+            cerr << "------Counter at max----------" << endl << flush;
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 0;
             rt_mutex_release(&mutex_robotStarted);
