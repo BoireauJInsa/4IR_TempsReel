@@ -31,13 +31,23 @@
 #define PRIORITY_TCAMERACONTROL 18
 #define MAX_COUNTER 3
 
-
+//enable battery information 
 bool batteryRequested = false;
+
+//enable camera
+//0 for off, 1 for default, 2 for position
 int grab = 0;
+
+//put to 1 to compute position
 bool posCompute = 0;
+
+//equal to one if arena is found
 int arenaFound = 0;
 
+//enabel watchdog
 bool watchDog = false;
+
+//compte le nombre de messages perdus
 int counter;
 
 
@@ -249,7 +259,7 @@ void Tasks::ServerTask(void *arg) {
     rt_sem_p(&sem_barrier, TM_INFINITE);
 
     /**************************************************************************************/
-    /* The task server starts here                                                        */
+    /* The task Server starts here                                                        */
     /**************************************************************************************/
     rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
     status = monitor.Open(SERVER_PORT);
@@ -471,8 +481,10 @@ void Tasks::ControlCamera(void *arg){
                  if(posCompute == 1){
                     std::list<Position> allPos = image.SearchRobot(arena);
                     if(!allPos.empty()){
-                        Position pos = allPos.back();
-                        image.DrawRobot(pos);
+                        for (Position pos: allPos) {
+                            image.DrawRobot(pos);
+                        }
+                        
                     }
                 }
                 msg->SetID(MESSAGE_CAM_IMAGE);
@@ -579,7 +591,7 @@ void Tasks::StartRobotTask(void *arg) {
     rt_sem_p(&sem_barrier, TM_INFINITE);
     
     /**************************************************************************************/
-    /* The task startRobot starts here                                                    */
+    /* The task tartRobot starts here                                                    */
     /**************************************************************************************/
     while (1) {
         Message * msgSend;
@@ -630,7 +642,7 @@ void Tasks::MoveTask(void *arg) {
     rt_sem_p(&sem_barrier, TM_INFINITE);
     
     /**************************************************************************************/
-    /* The task starts here                                                               */
+    /* The task MoveTask starts here                                                               */
     /**************************************************************************************/
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
 
@@ -688,17 +700,21 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
     return msg;
 }
 
+    /**************************************************************************************/
+    /* The task Counter starts here (not a thread)                                                              */
+    /**************************************************************************************/
+//if communication time out three time in a row, stop robot
 void Tasks::Counter(Message *msg){
     MessageID msgID = msg->GetID();
     if(msgID == MESSAGE_ANSWER_COM_ERROR || msgID == MESSAGE_ANSWER_ROBOT_ERROR || msgID == MESSAGE_ANSWER_ROBOT_TIMEOUT || msgID == MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND){
         counter ++;
-        cerr << "-----timeout for supervisor cmd one time------------" << endl << flush;
+        cerr << "-----communication timeout occured one time------------" << endl << flush;
     }else{
         counter = 0;
-        cerr << "-----reponse ok, no timeout------------" << endl << flush;
+        cerr << "-----communication OK------------" << endl << flush;
     }
     if(counter >= MAX_COUNTER){
-            cerr << "------Counter at max----------" << endl << flush;
+            cerr << "------Communication timeout three time in a row, stop robot----------" << endl << flush;
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 0;
             rt_mutex_release(&mutex_robotStarted);
