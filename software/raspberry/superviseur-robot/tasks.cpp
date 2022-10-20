@@ -29,12 +29,16 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TBATTERYUPDATE 19
 #define PRIORITY_TCAMERACONTROL 18
+#define MAX_COUNTER 3
 
 
 bool batteryRequested = false;
 bool cameraEnabled = false;
 
 bool watchDog = false;
+int counter;
+
+
 Camera * camera = new Camera(sm, 5);
 
 /*
@@ -357,10 +361,12 @@ void Tasks::ReceiveFromMonTask(void *arg) {
                 robot.Write(robot.ReloadWD());
             rt_mutex_release(&mutex_watchdog);
 
-            rt_sem_v(&sem_startRobot);
-            
+            rt_sem_v(&sem_startRobot);   
+        } else if (!(msgRcv->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT))){
+            counter = 0;
+            cout << "   ALL GOOD " << endl
+                     << flush;
         }
-
         delete(msgRcv); // must be deleted manually, no consumer
     }
 }
@@ -566,6 +572,14 @@ void Tasks::StartRobotTask(void *arg) {
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 1;
             rt_mutex_release(&mutex_robotStarted);
+            counter = 0;
+        }else if (msgSend->GetID()== MESSAGE_ANSWER_ROBOT_TIMEOUT){
+            counter += 1;
+            if (counter > MAX_COUNTER)
+            {
+                cout << "ERROR communication between robot and supervisor lost." << endl
+                     << flush;
+            } 
         }else {
             WriteInQueue(&q_messageToMon, msgSend);
         }
