@@ -20,17 +20,20 @@
 
 // Déclaration des priorités des taches
 #define PRIORITY_TSERVER 30
+#define PRIORITY_TWATCHDOG 26
+#define PRIORITY_TRECEIVEFROMMON 25
+#define PRIORITY_TSENDTOMON 22
+#define PRIORITY_TCAMERA 21
 #define PRIORITY_TOPENCOMROBOT 20
 #define PRIORITY_TMOVE 20
-#define PRIORITY_TSENDTOMON 22
-#define PRIORITY_TRECEIVEFROMMON 25
 #define PRIORITY_TSTARTROBOT 20
-#define PRIORITY_TCAMERA 21
 #define PRIORITY_TBATTERYUPDATE 19
 #define PRIORITY_TCAMERACONTROL 18
 
+
 bool batteryRequested = false;
 bool cameraEnabled = false;
+bool watchDog = false;
 /*
  * Some remarks:
  * 1- This program is mostly a template. It shows you how to create tasks, semaphore
@@ -137,6 +140,10 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_create(&th_watchDog, "th_watchDog", 0, PRIORITY_TWATCHDOG, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     cout << "Tasks created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -189,6 +196,11 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_start(&th_watchDog, (void(*)(void*)) & Tasks::WatchDog, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
 
     cout << "Tasks launched" << endl << flush;
 }
@@ -283,6 +295,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
 
         if (msgRcv->CompareID(MESSAGE_MONITOR_LOST)) {
             delete(msgRcv);
+            //TODO : Perte de communication ici ? 
             exit(-1);
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_COM_OPEN)) {
             rt_sem_v(&sem_openComRobot);
@@ -303,7 +316,9 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             cameraEnabled = true;
         } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
             cameraEnabled = false;
-        }
+        } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)) {
+            rt_sem_v(&sem_startRobot);
+            watchDog = true;
         delete(msgRcv); // must be deleted manually, no consumer
     }
 }
@@ -397,6 +412,48 @@ void Tasks::ControlCamera(void *arg){
 }
 
 /**
+ * @brief Thread sending battery level.
+ */
+void Tasks::WatchDog(void *arg){
+    int rs;
+
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+
+    /**************************************************************************************/
+    /* The task WatchDog starts here                                                  */
+    /**************************************************************************************/
+
+    // Mise à jour de la périodicité : 1S
+    rt_task_set_periodic(NULL, TM_NOW, 10000000000);
+    
+    if (watchDog) {
+        while (1) {
+            rt_task_wait_period(NULL);
+
+            // Mutex pour rs
+            rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+            rs = robotStarted;
+            rt_mutex_release(&mutex_robotStarted);
+         
+            // Si Demarage en watchdog
+            if (watchDog && rs == 1) {
+            cout << "Periodic WatchDog reload" << endl << flush;
+
+            // Mutex pour robot.Write
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            MessageBattery * msgSend;
+            robot.Write(new Message(MESSAGE_ROBOT_RELOAD_WD));
+            rt_mutex_release(&mutex_robot);
+            }
+        }
+    }
+}
+
+void
+
+/**
  * @brief Thread opening communication with the robot.
  */
 void Tasks::OpenComRobot(void *arg) {
@@ -443,12 +500,23 @@ void Tasks::StartRobotTask(void *arg) {
     while (1) {
         Message * msgSend;
         rt_sem_p(&sem_startRobot, TM_INFINITE);
-        cout << "Start robot without watchdog (";
-        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-        msgSend = robot.Write(robot.StartWithoutWD());
-        rt_mutex_release(&mutex_robot);
-        cout << msgSend->GetID();
-        cout << ")" << endl;
+
+        if (watchDog){
+            cout << "Start robot WITH watchdog (";
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msgSend = robot.Write(robot.StartWithWD());
+            rt_mutex_release(&mutex_robot);
+            cout << msgSend->GetID();
+            cout << ")" << endl;
+
+        } else {
+            cout << "Start robot without watchdog (";
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msgSend = robot.Write(robot.StartWithoutWD());
+            rt_mutex_release(&mutex_robot);
+            cout << msgSend->GetID();
+            cout << ")" << endl;
+        }
 
         cout << "Movement answer: " << msgSend->ToString() << endl << flush;
         WriteInQueue(&q_messageToMon, msgSend);  // msgSend will be deleted by sendToMon
@@ -457,6 +525,8 @@ void Tasks::StartRobotTask(void *arg) {
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 1;
             rt_mutex_release(&mutex_robotStarted);
+        }else {
+            WriteInQueue(&q_messageToMon, msgSend);
         }
     }
 }
