@@ -78,6 +78,7 @@ private:
     RT_TASK th_move;
     RT_TASK th_batteryUpdate;
     RT_TASK th_controlCamera;
+    RT_TASK th_watchDog;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -143,6 +144,11 @@ private:
      * @brief Thread controlling camera.
      */
     void ControlCamera(void *arg);
+
+    /**
+     * @brief Thread controlling watchdog.
+     */
+    void WatchDog(void *arg);
     
     /**********************************************************************/
     /* Queue services                                                     */
