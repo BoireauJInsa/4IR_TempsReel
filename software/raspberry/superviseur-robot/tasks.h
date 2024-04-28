@@ -65,6 +65,7 @@ private:
     ComMonitor monitor;
     ComRobot robot;
     int robotStarted = 0;
+    Arena arena;
     int move = MESSAGE_ROBOT_STOP;
     
     /**********************************************************************/
@@ -151,6 +152,11 @@ private:
      * @brief Thread controlling watchdog.
      */
     void WatchDog(void *arg);
+
+    /**
+     * @brief Thread controlling counter.
+     */
+    void Counter(Message *msg);
     
     /**********************************************************************/
     /* Queue services                                                     */

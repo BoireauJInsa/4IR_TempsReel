@@ -20,7 +20,7 @@
 
 // Déclaration des priorités des taches
 #define PRIORITY_TSERVER 30
-#define PRIORITY_TWATCHDOG 26
+#define PRIORITY_TWATCHDOG 2
 #define PRIORITY_TRECEIVEFROMMON 25
 #define PRIORITY_TSENDTOMON 22
 #define PRIORITY_TCAMERA 21
@@ -33,7 +33,9 @@
 
 
 bool batteryRequested = false;
-bool cameraEnabled = false;
+int grab = 0;
+bool posCompute = 0;
+int arenaFound = 0;
 
 bool watchDog = false;
 int counter;
@@ -284,6 +286,7 @@ void Tasks::SendToMonTask(void* arg) {
         cout << "Send msg to mon: " << msg->ToString() << endl << flush;
         rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
         monitor.Write(msg); // The message is deleted with the Write
+        Counter(msg);
         rt_mutex_release(&mutex_monitor);
     }
 }
@@ -331,7 +334,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
             bool state = camera->Open();
             if(state){
-                cameraEnabled = 1;
+                grab = 1;
 
             } else{
                 monitor.Write(new Message(MESSAGE_ANSWER_NACK));
@@ -339,16 +342,30 @@ void Tasks::ReceiveFromMonTask(void *arg) {
 
             cout << "Asking for cam open" << endl << flush;
         } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
-
-            cameraEnabled = false;
         
             camera->Close();
             bool state = camera->IsOpen();
-            cameraEnabled = 0;
+            grab = 0;
             if(!state){
                 monitor.Write(new Message(MESSAGE_ANSWER_ACK));
                 cout << "Asking for cam close" << endl << flush;
             }
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
+            grab = 2;
+            cout << "Asking for arena" << endl << flush;
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
+            arenaFound = 1;
+            grab = 1;
+            cout << "Comfirm for arena" << endl << flush;
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
+            grab = 1;
+            cout << "Infirm for arena" << endl << flush;
+        } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
+            posCompute = 1;
+            cout << "Asking for position compute start" << endl << flush;
+        } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)) {
+            posCompute = 0;
+            cout << "Asking for position compute stop" << endl << flush;
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)) {
             rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
             watchDog = true;
@@ -362,10 +379,6 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_mutex_release(&mutex_watchdog);
 
             rt_sem_v(&sem_startRobot);   
-        } else if (!(msgRcv->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT))){
-            counter = 0;
-            cout << "   ALL GOOD " << endl
-                     << flush;
         }
         delete(msgRcv); // must be deleted manually, no consumer
     }
@@ -434,26 +447,56 @@ void Tasks::ControlCamera(void *arg){
     while (1) {
         rt_task_wait_period(NULL);
         
-        // Mutex pour rs
-        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-        rs = robotStarted;
-        rt_mutex_release(&mutex_robotStarted);
-
-        if (cameraEnabled) {
-            try {
-                
-                MessageImg * msg = new MessageImg();
-                Img image = camera->Grab();
-                    msg->SetID(MESSAGE_CAM_IMAGE);
-                    msg->SetImage(&image);
-                    WriteInQueue(&q_messageToMon, msg);
-            
-            }catch( const cv::Exception & e ) {
-                cerr << e.what() << endl;
-
+        if(grab == 2){ // Looking for arena
+            MessageImg * msg = new MessageImg();
+            Img image = camera->Grab();
+            Arena arenaSearch = image.SearchArena();
+            if(arenaSearch.IsEmpty()){
+                cout << "Arena not found" << endl << flush;
+                monitor.Write(new Message(MESSAGE_ANSWER_NACK));
+            }else{
+                arena = arenaSearch;
+                cout << "Arena found" << endl << flush;
+                image.DrawArena(arena);
+                msg->SetID(MESSAGE_CAM_IMAGE);
+                msg->SetImage(&image);
+                WriteInQueue(&q_messageToMon, msg);
             }
         }
+        else if(grab == 1 && arenaFound == 1){ // Periodic grab with arena
+            try{
+                MessageImg * msg = new MessageImg();
+                Img image = camera->Grab();
+                image.DrawArena(arena);
+                 if(posRobot == 1){
+                    std::list<Position> allPos = image.SearchRobot(arena);
+                    if(!allPos.empty()){
+                        Position pos = allPos.back();
+                        image.DrawRobot(pos);
+                    }
+                }
+                msg->SetID(MESSAGE_CAM_IMAGE);
+                msg->SetImage(&image);
+                WriteInQueue(&q_messageToMon, msg);
+            }catch( const cv::Exception & e ) {
+                cerr << e.what() << endl;
+            } 
+        }
+        else if (grabImage == 1) {  // Default periodic image grab
+            try{
+                MessageImg * msg = new MessageImg();
+                Img image = camera->Grab();
+                msg->SetID(MESSAGE_CAM_IMAGE);
+                msg->SetImage(&image);
+                WriteInQueue(&q_messageToMon, msg);
+            }catch( const cv::Exception & e ) {
+                cerr << e.what() << endl;
+            } 
+        }
+
+        cout << endl << flush;
     }
+    
 }
 
 /**
@@ -545,7 +588,7 @@ void Tasks::StartRobotTask(void *arg) {
         rt_sem_p(&sem_startRobot, TM_INFINITE);
 
         rt_mutex_acquire(&mutex_watchdog, TM_INFINITE);
-         bool local = watchDog;
+        bool local = watchDog;
         rt_mutex_release(&mutex_watchdog);   
 
         if (local){
@@ -564,6 +607,7 @@ void Tasks::StartRobotTask(void *arg) {
             cout << msgSend->GetID();
             cout << ")" << endl;
         }
+        cout << flush;
 
         cout << "Movement answer: " << msgSend->ToString() << endl << flush;
         WriteInQueue(&q_messageToMon, msgSend);  // msgSend will be deleted by sendToMon
@@ -572,16 +616,6 @@ void Tasks::StartRobotTask(void *arg) {
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 1;
             rt_mutex_release(&mutex_robotStarted);
-            counter = 0;
-        }else if (msgSend->GetID()== MESSAGE_ANSWER_ROBOT_TIMEOUT){
-            counter += 1;
-            if (counter > MAX_COUNTER)
-            {
-                cout << "ERROR communication between robot and supervisor lost." << endl
-                     << flush;
-            } 
-        }else {
-            WriteInQueue(&q_messageToMon, msgSend);
         }
     }
 }
@@ -616,7 +650,8 @@ void Tasks::MoveTask(void *arg) {
             cout << " move: " << cpMove;
             
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            robot.Write(new Message((MessageID)cpMove));
+            Message msg = robot.Write(new Message((MessageID)cpMove));
+            Counter(msg);
             rt_mutex_release(&mutex_robot);
         }
         cout << endl << flush;
@@ -653,4 +688,20 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
     } /**/
 
     return msg;
+}
+
+void Tasks::Counter(Message *msg){
+    MessageID msgID = msg->GetID();
+    if(msgID == MESSAGE_ANSWER_COM_ERROR || msgID == MESSAGE_ANSWER_ROBOT_ERROR || msgID == MESSAGE_ANSWER_ROBOT_TIMEOUT || msgID == MESSAGE_ANSWER_ROBOT_UNKNOWN_COMMAND){
+        counter ++;
+    }else{
+        counter = 0;
+    }
+    if(lostCount >= MAX_COUNTER){
+            cerr << "Counter at max" << endl << flush;
+            rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+            robotStarted = 0;
+            rt_mutex_release(&mutex_robotStarted);
+            robot.Write(robot.Stop());
+    }
 }
